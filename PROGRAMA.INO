@@ -1,102 +1,98 @@
 #include <ESP8266WiFi.h>
 #include <PubSubClient.h>
 
-// WiFi
+// ======== THINGSBOARD KONFIGURAZIOA ========
+#define TOKEN "1267VXVAYkywiLEECJDA"   // <-- HEMEN zure Access Token-a
+#define THINGSBOARD_SERVER "eu.thingsboard.cloud"
+#define THINGSBOARD_PORT 1883
+
+// ======== WIFI DATUAK ========
 const char* ssid = "OLP";
 const char* password = "oteitzaLP";
 
-// ThingsBoard Demo
-const char* mqtt_server = "demo.thingsboard.io";
-const int mqtt_port = 1883;
-const char* access_token = "2ZjHyrN6e3CWWu5R1oSG";  // <-- CAMBIAR
-
+// ======== OBJEKTUAK ========
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// Pines
-const int flashButton = 0;       // GPIO0 (FLASH)
-const int led = LED_BUILTIN;     // LED interno (activo en LOW)
+// ======== PIN DEFINIZIOAK ========
+const int pinPotentziometroa = A0;  // Potentziometroa
+const int ledGorria = D1;           // LED gorriak GPIO pin honetan
 
-// Estado anterior del botón (para no enviar datos repetidos)
-bool lastButtonState = HIGH;
+// ======== ALDAKORRAK ========
+int balioGordina = 0;
+int balioEskalatua = 0;
 
-// WiFi conexión
-void setup_wifi() {
-  delay(10);
-  Serial.println();
-  Serial.print("WiFi konektatzen: ");
-  Serial.println(ssid);
+void setup() {
+  Serial.begin(115200);
 
+  pinMode(ledGorria, OUTPUT);
+  digitalWrite(ledGorria, LOW);  // LED itzali hasieran
+
+  // WiFi konektatzea
   WiFi.begin(ssid, password);
-
+  Serial.print("WiFi konektatzen...");
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
   }
-
-  Serial.println("");
-  Serial.println("WiFi konektatua!");
+  Serial.println();
+  Serial.println("WiFi konektatuta!");
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
+
+  // ThingsBoard konfiguratu
+  client.setServer(THINGSBOARD_SERVER, THINGSBOARD_PORT);
 }
 
-// Reconexión MQTT
 void reconnect() {
+  // Berriro konektatu MQTT ThingsBoard-era
   while (!client.connected()) {
     Serial.print("ThingsBoard konektatzen...");
-    if (client.connect("ESP8266", access_token, NULL)) {
-      Serial.println(" konektatua!");
+    if (client.connect("ESP8266_Client", TOKEN, NULL)) {
+      Serial.println(" konektatuta!");
     } else {
       Serial.print("Errorea rc=");
       Serial.print(client.state());
-      Serial.println(" berriro 5 segundotan...");
-      delay(5000);
+      Serial.println(" berriro 2 segundutan...");
+      delay(2000);
     }
   }
 }
 
-void setup() {
-  Serial.begin(9600);
-
-  pinMode(flashButton, INPUT_PULLUP);
-  pinMode(led, OUTPUT);
-  digitalWrite(led, HIGH);  // LED apagado (activo LOW)
-
-  setup_wifi();
-  client.setServer(mqtt_server, mqtt_port);
-}
-
 void loop() {
-
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
 
-  bool buttonState = digitalRead(flashButton);
+  // 1️⃣ Potentziometroaren balioa irakurri (0-1023)
+  balioGordina = analogRead(pinPotentziometroa);
 
-  // Detectar cambio de estado
-  if (buttonState != lastButtonState) {
+  // 2️⃣ Eskalatu 0-100 tartera
+  balioEskalatua = map(balioGordina, 0, 1023, 0, 100);
+  balioEskalatua = constrain(balioEskalatua, 0, 100);
 
-    if (buttonState == LOW) {
-      // Botón pulsado
-      digitalWrite(led, LOW);  // Encender LED
-
-      client.publish("v1/devices/me/telemetry",
-                     "{\"button\":true,\"led\":true}");
-
-      Serial.println("Botón pulsado - LED ON");
-    } else {
-      // Botón liberado
-      digitalWrite(led, HIGH); // Apagar LED
-
-      client.publish("v1/devices/me/telemetry",
-                     "{\"button\":false,\"led\":false}");
-
-      Serial.println("Botón liberado - LED OFF");
-    }
-
-    lastButtonState = buttonState;
-    delay(50);  // pequeño debounce
+  // 3️⃣ LED gorri kontrola eta alarma
+  bool ledState = false;   // LED egoera ThingsBoard-era bidaltzeko
+  bool alarma = false;
+  if(balioEskalatua > 80) {
+    digitalWrite(ledGorria, HIGH);  // LED piztu
+    alarma = true;
+    ledState = true;
+  } else {
+    digitalWrite(ledGorria, LOW);   // LED itzali
   }
+
+  // 4️⃣ JSON bidalketa ThingsBoard-era (potentziometroa + alarma + LED egoera)
+  char payload[120];
+  sprintf(payload, "{\"potentziometroa\":%d, \"alarma\":%s, \"led\":%s}", 
+          balioEskalatua, 
+          alarma ? "true" : "false",
+          ledState ? "true" : "false");
+  client.publish("v1/devices/me/telemetry", payload);
+
+  // 5️⃣ Serial monitorrean bistaratzea
+  Serial.println(payload);
+
+  delay(1000); // 1 segundoko atzerapena
 }
